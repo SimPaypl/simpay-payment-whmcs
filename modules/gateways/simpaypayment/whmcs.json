@@ -1,0 +1,36 @@
+{
+  "schema": "1.0",
+  "type": "whmcs-gateways",
+  "name": "simpaypayment",
+  "license": "proprietary",
+  "category": "payments",
+  "description": {
+    "name": "SimPay.pl Przelewy i BLIK",
+    "tagline": "Szybkie i bezpieczne przelewy online i BLIK z SimPay.pl.",
+    "long": "SimPay to wiodący polski operator płatności, który obsługuje szybkie przelewy online, płatności SMS Premium i mobilne. Firma dostarcza elastyczne, łatwe w integracji rozwiązania, wspierając przedsiębiorstwa w oferowaniu wygodnych i bezpiecznych metod płatności. Dzięki nowoczesnym technologiom SimPay umożliwia monetyzację usług w różnych branżach, zapewniając wysoki poziom niezawodności i zadowolenia klientów.",
+    "features": [
+      "Szybkie przelewy online i BLIK",
+      "Elastyczne modele rozliczeń",
+      "Bezpieczne płatności"
+    ]
+  },
+  "logo": {
+    "filename": "logo.png"
+  },
+  "support": {
+    "homepage": "https:\/\/simpay.pl\/",
+    "docs_url": "https:\/\/simpay.pl\/dla-developerow\/integracje\/whmcs",
+    "email": "kontakt@simpay.pl",
+    "support_url": "https:\/\/simpay.pl\/kontakt"
+  },
+  "authors": [
+    {
+      "name": "Payments Solution Sp. z o.o.",
+      "homepage": "https:\/\/simpay.pl"
+    },
+    {
+      "name": "Patryk Vizauer",
+      "homepage": "https:\/\/github.com\/PatryQHyper"
+    }
+  ]
+}
