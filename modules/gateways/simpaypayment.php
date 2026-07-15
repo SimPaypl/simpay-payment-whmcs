@@ -1,6 +1,6 @@
 <?php
 /**
- * SimPay.pl Payment Gateway
+ * SimPay.pl Payment Gateway for WHMCS
  *
  * @copyright Copyright (c) 2025 Payments Solution Sp. z o.o.
  */
@@ -11,198 +11,157 @@ if (!defined('WHMCS')) {
     die('This file cannot be accessed directly');
 }
 
-const SIMPAY_PAYMENT_VERSION = '1.0.0';
+require_once __DIR__ . '/simpaypayment/vendor/autoload.php';
+require_once __DIR__ . '/simpaypayment/helpers.php';
+require_once __DIR__ . '/simpaypayment/transaction.php';
+require_once __DIR__ . '/simpaypayment/channels.php';
 
-// https://developers.whmcs.com/payment-gateways/meta-data-params/
+const SIMPAY_PAYMENT_VERSION = '2.0.0';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WHMCS Gateway API
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * @see https://developers.whmcs.com/payment-gateways/meta-data-params/
+ */
 function simpaypayment_MetaData()
 {
-    return array(
+    return [
         'DisplayName' => 'SimPay.pl Przelewy i BLIK',
         'APIVersion' => '1.1',
         'DisableLocalCreditCardInput' => true,
         'TokenisedStorage' => false,
-    );
+    ];
 }
 
 /**
- * Define gateway configuration options.
- *
- * The fields you define here determine the configuration options that are
- * presented to administrator users when activating and configuring your
- * payment gateway module for use.
- *
- * Supported field types include:
- * * text
- * * password
- * * yesno
- * * dropdown
- * * radio
- * * textarea
- *
- * Examples of each field type and their possible configuration parameters are
- * provided in the sample function below.
- *
- * @return array
+ * Gateway configuration options.
  */
 function simpaypayment_config()
 {
-    $systemUrl = Setting::getValue('SystemURL');
-    $simpayVersion = simpay_payment_internal_get_version();
+    $systemUrl = rtrim(Setting::getValue('SystemURL'), '/');
+    $ipnUrl = $systemUrl . '/modules/gateways/callback/simpaypayment.php';
 
-    return array(
-        'FriendlyName' => array(
+    return [
+        'FriendlyName' => [
             'Type' => 'System',
             'Value' => 'SimPay.pl Przelewy i BLIK',
-        ),
-        'simpay_payment_bearer' => array(
-            'FriendlyName' => 'Hasło / Bearer Token',
+        ],
+
+        // ── Connection settings ──────────────────────────────────────────────
+
+        'simpay_section_connection' => [
+            'FriendlyName' => '<strong>' . simpaypayment_admin_t('admin_section_connection') . '</strong>',
+            'Type' => 'info',
+            'Description' => simpaypayment_admin_t('admin_section_connection_desc')
+                . '<br><small><a href="https://panel.simpay.pl" target="_blank">panel.simpay.pl</a></small>',
+        ],
+        'simpay_payment_service_id' => [
+            'FriendlyName' => simpaypayment_admin_t('admin_field_service_id'),
+            'Type' => 'text',
+            'Size' => '40',
+            'Default' => '',
+            'Description' => '<br><small>' . simpaypayment_admin_t('admin_field_service_id_desc') . '</small>',
+        ],
+        'simpay_payment_bearer' => [
+            'FriendlyName' => simpaypayment_admin_t('admin_field_bearer'),
             'Type' => 'password',
             'Size' => '128',
             'Default' => '',
-            'Description' => 'Zakładka Konto Klienta > API > {WYBRANY KLUCZ} > "Szczegóły"',
-        ),
-        'simpay_payment_service_id' => array(
-            'FriendlyName' => 'ID usługi',
-            'Type' => 'text',
-            'Size' => '8',
-            'Default' => '',
-            'Description' => 'Zakładka Płatności online > Usługi > {WYBIERZ USŁUGĘ} > Szczegóły',
-        ),
-        'simpay_payment_service_hash' => array(
-            'FriendlyName' => 'Klucz do sygnatury IPN usługi',
+            'Description' => '<br><small>' . simpaypayment_admin_t('admin_field_bearer_desc') . '</small>',
+        ],
+        'simpay_payment_service_hash' => [
+            'FriendlyName' => simpaypayment_admin_t('admin_field_signature_key'),
             'Type' => 'password',
             'Size' => '64',
             'Default' => '',
-            'Description' => 'Zakładka Płatności online > Usługi > {WYBIERZ USŁUGĘ} > Szczegóły > Ustawienia usługi',
-        ),
-        'simpay_payment_ipn_check_ip' => array(
-            'FriendlyName' => 'Sprawdzaj adres IP w IPN',
+            'Description' => '<br><small>' . simpaypayment_admin_t('admin_field_signature_key_desc') . '</small>',
+        ],
+
+        // ── Webhook ──────────────────────────────────────────────────────────
+
+        'simpay_section_webhook' => [
+            'FriendlyName' => '<strong>' . simpaypayment_admin_t('admin_section_webhook') . '</strong>',
+            'Type' => 'info',
+            'Description' => simpaypayment_admin_t('admin_webhook_desc')
+                . '<br><code style="display:inline-block;margin-top:5px;padding:6px 12px;background:#f5f5f5;border:1px solid #ddd;border-radius:4px;font-size:13px;">' . $ipnUrl . '</code>',
+        ],
+        'simpay_payment_ipn_check_ip' => [
+            'FriendlyName' => simpaypayment_admin_t('admin_field_check_ip'),
             'Type' => 'yesno',
-            'Size' => '64',
             'Default' => 'yes',
-            'Description' => 'Włącz walidację adresu IP przy przychodzącym IPN. Jeśli korzystasz z proxy - radzimy wyłączyć.',
-        ),
-        'simpay_payment_ipn_url' => array(
-            'FriendlyName' => 'URL IPN',
+            'Description' => simpaypayment_admin_t('admin_field_check_ip_desc')
+                . '<br><small>' . simpaypayment_admin_t('admin_field_check_ip_hint') . '</small>',
+        ],
+
+        // ── Payment display ──────────────────────────────────────────────────
+
+        'simpay_section_display' => [
+            'FriendlyName' => '<strong>' . simpaypayment_admin_t('admin_section_display') . '</strong>',
             'Type' => 'info',
-            'Size' => '255',
-            'Default' => '',
-            'Description' => '<div class="successbox">W panelu SimPay ustaw adres adres URL IPN na: <b>' . $systemUrl . '/modules/gateways/callback/simpaypayment.php</b></div>',
-        ),
-        'simpay_version_info' => array(
-            'FriendlyName' => 'Wersja wtyczki',
+            'Description' => simpaypayment_admin_t('admin_section_display_desc'),
+        ],
+        'simpay_payment_show_channels' => [
+            'FriendlyName' => simpaypayment_admin_t('admin_field_show_channels'),
+            'Type' => 'yesno',
+            'Default' => 'yes',
+            'Description' => simpaypayment_admin_t('admin_field_show_channels_desc')
+                . '<br><small>' . simpaypayment_admin_t('admin_field_show_channels_hint') . '</small>',
+        ],
+
+        // ── Plugin info ──────────────────────────────────────────────────────
+
+        'simpay_section_info' => [
+            'FriendlyName' => '<strong>' . simpaypayment_admin_t('admin_section_info') . '</strong>',
             'Type' => 'info',
-            'Size' => '255',
-            'Default' => '',
-            'Description' => $simpayVersion,
-        ),
-    );
+            'Description' => simpaypayment_check_version(),
+        ],
+    ];
 }
 
 /**
- * Payment link.
- *
- * Required by third party payment gateway modules only.
- *
- * Defines the HTML output displayed on an invoice. Typically consists of an
- * HTML form that will take the user to the payment gateway endpoint.
- *
- * @param array $params Payment Gateway Module Parameters
- *
- * @return string
- * @see https://developers.whmcs.com/payment-gateways/third-party-gateway/
- *
+ * Payment link — HTML displayed on the invoice page.
  */
 function simpaypayment_link($params)
 {
-    if($params['currency'] !== 'PLN') {
-        return '<h3 style="color:red;">Wystąpił błąd podczas generowania płatności [SIMPAY003].</h3><h4>Płatności SimPay.pl są dostępne tylko dla waluty PLN.</p>';
+    if ($params['currency'] !== 'PLN') {
+        return '<div class="alert alert-danger">' . simpaypayment_t('currency_error', $params) . '</div>';
     }
 
-    $payload = array(
-        'amount' => (float)$params['amount'],
-        'currency' => $params['currency'],
-        'description' => $params['description'],
-        'control' => (string)$params['invoiceid'],
-        'customer' => array(
-            'name' => substr($params['clientdetails']['firstname'] . ' ' . $params['clientdetails']['lastname'], 0, 64),
-            'email' => $params['clientdetails']['email'],
-        ),
-        'antifraud' => array(
-            'systemId' => !empty($params['clientdetails']['client_id']) ? $params['clientdetails']['client_id'] : null,
-        ),
-        'billing' => array(
-            'name' => $params['clientdetails']['firstname'],
-            'surname' => $params['clientdetails']['lastname'],
-            'street' => $params['clientdetails']['address1'],
-            'building' => $params['clientdetails']['address2'],
-            'city' => $params['clientdetails']['city'],
-            'region' => $params['clientdetails']['state'],
-            'postalCode' => $params['clientdetails']['postcode'],
-            'country' => $params['clientdetails']['countrycode'],
-            'company' => $params['clientdetails']['companyname'],
-        ),
-        'returns' => array(
-            'success' => $params['returnurl'],
-            'failure' => $params['returnurl'],
-        ),
-    );
-
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, sprintf('https://api.simpay.pl/payment/%s/transactions', $params['simpay_payment_service_id']));
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_HTTPHEADER, array(
-        'Authorization: Bearer ' . $params['simpay_payment_bearer'],
-        'Content-Type: application/json',
-        'Accept: application/json',
-        'X-SIM-PLATFORM: WHMCS',
-        'X-SIM-PLATFORM-VERSION: ' . $params['whmcsVersion'],
-    ));
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-
-    $response = curl_exec($ch);
-
-    if (curl_errno($ch)) {
-        logModuleCall('simpaypayment', 'link:001', $payload, curl_error($ch));
-
-        return '<h3 style="color:red;">Wystąpił błąd podczas generowania płatności [SIMPAY001].</h3><h4>Za utrudnienia przepraszamy!</h4><p>Informacje dla administratora zostały zapisane w logach WHMCS.</p>';
+    if ($params['simpay_payment_show_channels'] === 'on') {
+        return simpaypayment_render_channel_selection($params);
     }
 
-    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    if ((int)$httpCode < 200 || $httpCode >= 300) {
-        logModuleCall('simpaypayment', 'link:002', $payload, $response);
-
-        return '<h3 style="color:red;">Wystąpił błąd podczas generowania płatności [SIMPAY002].</h3><h4>Za utrudnienia przepraszamy!</h4><p>Informacje dla administratora zostały zapisane w logach WHMCS.</p>';
-    }
-
-    $json = json_decode($response, true);
-    curl_close($ch);
-
-    return sprintf('<a href="%s">%s</a>', $json['data']['redirectUrl'], $params['langpaynow']);
+    return simpaypayment_create_and_redirect($params);
 }
 
-function simpay_payment_internal_get_version()
+/**
+ * Admin status check — transaction details in the admin panel.
+ */
+function simpaypayment_AdminStatusCheck($params)
 {
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, 'https://api.simpay.pl/ecommerce/plugin/whmcs/version');
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
-    $response = curl_exec($ch);
-    curl_close($ch);
+    try {
+        $simpay = simpaypayment_get_sdk($params);
+        $transactionId = $params['transid'];
 
-    $response = json_decode($response, true);
+        if (empty($transactionId)) {
+            return ['status' => 'Brak ID transakcji'];
+        }
 
-    if (version_compare($response['data']['version'], SIMPAY_PAYMENT_VERSION, '>')) {
-        return sprintf(
-            '<div class="errorbox">Dostępna jest nowa wersja wtyczki WHMCS SimPay. Twoja wersja: %s, nowa wersja: %s. Możesz pobrać wtyczkę bezpośrednio <a href="%s" target="_blank">tutaj</a>.</div>',
-            SIMPAY_PAYMENT_VERSION,
-            $response['data']['version'],
-            $response['data']['zip_url']
-        );
+        $transaction = $simpay->client()->getTransaction($transactionId);
+        $data = $transaction['data'] ?? $transaction;
+
+        return [
+            'Transaction ID' => $data['id'] ?? $transactionId,
+            'Status' => $data['status'] ?? 'Nieznany',
+            'Amount' => isset($data['amount']['value']) ? $data['amount']['value'] . ' ' . ($data['amount']['currency'] ?? 'PLN') : '-',
+            'Channel' => $data['channel'] ?? '-',
+            'Paid At' => $data['paidAt'] ?? '-',
+            'Created At' => $data['createdAt'] ?? '-',
+        ];
+    } catch (\Throwable $e) {
+        return ['Error' => $e->getMessage()];
     }
-
-    return sprintf(
-        '<div class="successbox">Twoja wtyczka jest aktualna. Wersja: %s</div>',
-        SIMPAY_PAYMENT_VERSION
-    );
 }
+

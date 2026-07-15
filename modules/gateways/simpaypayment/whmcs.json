@@ -10,8 +10,11 @@
     "long": "SimPay to wiodący polski operator płatności, który obsługuje szybkie przelewy online, płatności SMS Premium i mobilne. Firma dostarcza elastyczne, łatwe w integracji rozwiązania, wspierając przedsiębiorstwa w oferowaniu wygodnych i bezpiecznych metod płatności. Dzięki nowoczesnym technologiom SimPay umożliwia monetyzację usług w różnych branżach, zapewniając wysoki poziom niezawodności i zadowolenia klientów.",
     "features": [
       "Szybkie przelewy online i BLIK",
-      "Elastyczne modele rozliczeń",
-      "Bezpieczne płatności"
+      "Wybór kanału płatności na stronie faktury",
+      "Sprawdzanie statusu transakcji w panelu admina",
+      "Obsługa wielu statusów IPN",
+      "Bezpieczna walidacja podpisu SHA-256",
+      "Elastyczne modele rozliczeń"
     ]
   },
   "logo": {

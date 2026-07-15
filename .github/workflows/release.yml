@@ -1,0 +1,57 @@
+name: Build Release ZIP
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          tools: composer:v2
+
+      - name: Install dependencies
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Prepare release structure
+        run: |
+          mkdir -p build/modules/gateways/callback
+          mkdir -p build/modules/gateways/simpaypayment
+
+          # Main gateway file
+          cp modules/gateways/simpaypayment.php build/modules/gateways/
+
+          # Callback
+          cp modules/gateways/callback/simpaypayment.php build/modules/gateways/callback/
+
+          # Module directory (includes vendor from composer)
+          cp -r modules/gateways/simpaypayment/* build/modules/gateways/simpaypayment/
+
+
+          # Remove unnecessary files from vendor
+          find build/modules/gateways/simpaypayment/vendor -name ".git" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build/modules/gateways/simpaypayment/vendor -name "tests" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build/modules/gateways/simpaypayment/vendor -name "Tests" -type d -exec rm -rf {} + 2>/dev/null || true
+          find build/modules/gateways/simpaypayment/vendor -name ".github" -type d -exec rm -rf {} + 2>/dev/null || true
+
+      - name: Create ZIP
+        run: |
+          cd build
+          zip -r ../simpay-whmcs-${{ github.ref_name }}.zip .
+
+      - name: Upload Release Asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: simpay-whmcs-${{ github.ref_name }}.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
