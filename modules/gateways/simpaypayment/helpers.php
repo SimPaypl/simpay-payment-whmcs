@@ -17,7 +17,7 @@ function simpaypayment_get_sdk(array $params): SimPay
         serviceId: $params['simpay_payment_service_id'],
         signatureKey: $params['simpay_payment_service_hash'],
         platform: 'WHMCS',
-        platformVersion: $params['whmcsVersion'] ?? '8.0'
+        platformVersion: (string) ($params['whmcsVersion'] ?? $GLOBALS['CONFIG']['Version'] ?? '8.0')
     );
 }
 
@@ -61,7 +61,7 @@ function simpaypayment_admin_t(string $key): string
     // Detect admin language from WHMCS session/config
     $adminLang = 'pl';
 
-    if (defined('ADMINAREA') || isset($GLOBALS['aInt'])) {
+    if (defined('ADMINAREA') || defined('SIMPAYPAYMENT_ADMIN_CONTEXT') || isset($GLOBALS['aInt'])) {
         $lang = strtolower($_SESSION['adminlang'] ?? \WHMCS\Config\Setting::getValue('Language') ?? 'polish');
         $langMap = ['polish' => 'pl', 'english' => 'en'];
         $adminLang = $langMap[$lang] ?? 'pl';

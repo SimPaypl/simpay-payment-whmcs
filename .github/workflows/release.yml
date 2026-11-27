@@ -34,7 +34,7 @@ jobs:
           cp modules/gateways/simpaypayment.php build/modules/gateways/
 
           # Callback
-          cp modules/gateways/callback/simpaypayment.php build/modules/gateways/callback/
+          cp modules/gateways/callback/simpaypayment.php modules/gateways/callback/simpaypayment_oauth.php build/modules/gateways/callback/
 
           # Module directory (includes vendor from composer)
           cp -r modules/gateways/simpaypayment/* build/modules/gateways/simpaypayment/

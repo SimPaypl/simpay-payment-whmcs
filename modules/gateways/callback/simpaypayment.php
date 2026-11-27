@@ -20,13 +20,13 @@ require_once $whmcsRoot . '/init.php';
 require_once $whmcsRoot . '/includes/gatewayfunctions.php';
 require_once $whmcsRoot . '/includes/invoicefunctions.php';
 require_once __DIR__ . '/../simpaypayment/vendor/autoload.php';
+require_once __DIR__ . '/../simpaypayment/helpers.php';
+require_once __DIR__ . '/../simpaypayment/transaction.php';
 
-use SimPay\SDK\SimPay;
-use SimPay\SDK\PaymentStatus;
-use SimPay\SDK\AmountVerifier;
 use SimPay\SDK\Exception\IpnException;
 use SimPay\SDK\Exception\IpNotAllowedException;
-use SimPay\SDK\Exception\ApiException;
+use SimPay\SDK\IpnPayload;
+use WHMCS\Database\Capsule;
 
 $gatewayModuleName = 'simpaypayment';
 $gatewayParams = getGatewayVariables($gatewayModuleName);
@@ -65,71 +65,40 @@ function simpaypayment_handle_create(array $gatewayParams): void
     $sig = $_POST['sig'] ?? '';
     $channelId = trim($_POST['channel'] ?? '');
 
+    if ((string) $gatewayParams['simpay_payment_service_hash'] === '') {
+        http_response_code(503);
+        die('Gateway not configured');
+    }
+
     // Verify HMAC signature to prevent tampering
-    $expectedSig = hash_hmac('sha256', $payloadRaw, $gatewayParams['simpay_payment_service_hash']);
-    if (!hash_equals($expectedSig, $sig)) {
+    $expectedSig = simpaypayment_sign_payload($payloadRaw, (string) $gatewayParams['simpay_payment_service_hash']);
+    if (!hash_equals($expectedSig, (string) $sig)) {
         logModuleCall('simpaypayment', 'create:invalid_signature', $_POST, '');
+        http_response_code(400);
         die('Invalid signature');
     }
 
-    $data = json_decode(base64_decode($payloadRaw), true);
-    if (empty($data) || empty($data['invoiceid'])) {
+    $data = json_decode((string) base64_decode($payloadRaw, true), true);
+    if (empty($data) || empty($data['invoiceid']) || empty($data['returnurl'])) {
+        http_response_code(400);
         die('Invalid payload');
     }
 
-    $returnUrl = $data['returnurl'];
+    $returnUrl = (string) $data['returnurl'];
+    $failUrl = $returnUrl . (str_contains($returnUrl, '?') ? '&' : '?') . 'paymentfailed=true';
 
-    $simpay = new SimPay(
-        bearerToken: $gatewayParams['simpay_payment_bearer'],
-        serviceId: $gatewayParams['simpay_payment_service_id'],
-        signatureKey: $gatewayParams['simpay_payment_service_hash'],
-        platform: 'WHMCS',
-        platformVersion: $GLOBALS['CONFIG']['Version'] ?? '8.0'
-    );
-
-    $builder = $simpay->transaction()
-        ->setAmount((float) $data['amount'], $data['currency'])
-        ->setDescription($data['description'])
-        ->setControl((string) $data['invoiceid'])
-        ->setCustomer(
-            $data['firstname'] . ' ' . $data['lastname'],
-            $data['email'],
-            $data['ip'] ?? $_SERVER['REMOTE_ADDR'] ?? null
-        )
-        ->setAntifraud(
-            !empty($data['client_id']) ? (string) $data['client_id'] : null,
-            $data['useragent'] ?? $_SERVER['HTTP_USER_AGENT'] ?? null
-        )
-        ->setReturnUrls($returnUrl, $returnUrl);
-
-    // Only include billing if meaningful address data exists
-    if (!empty($data['address1']) && !empty($data['city'])) {
-        $builder->setBilling(
-            $data['firstname'],
-            $data['lastname'],
-            $data['address1'] ?: null,
-            $data['address2'] ?: null,
-            $data['city'] ?: null,
-            $data['postcode'] ?: null,
-            $data['countrycode'] ?: null,
-            $data['companyname'] ?: null
-        );
-    }
-
-    if (!empty($channelId)) {
-        $builder->setDirectChannel($channelId);
-    }
-
-    $payload = $builder->toArray();
+    $payload = [];
 
     try {
+        $simpay = simpaypayment_get_sdk($gatewayParams);
+        $payload = simpaypayment_build_transaction($simpay, $data, $channelId)->toArray();
         $response = $simpay->client()->createTransaction($payload);
         $redirectUrl = $response['data']['redirectUrl'] ?? null;
 
         logModuleCall('simpaypayment', 'create:success', $payload, $response);
 
         if (empty($redirectUrl)) {
-            header('Location: ' . $returnUrl . '&paymentfailed=true');
+            header('Location: ' . $failUrl);
             exit;
         }
 
@@ -137,7 +106,7 @@ function simpaypayment_handle_create(array $gatewayParams): void
         exit;
     } catch (\Throwable $e) {
         logModuleCall('simpaypayment', 'create:error', $payload, $e->getMessage());
-        header('Location: ' . $returnUrl . '&paymentfailed=true');
+        header('Location: ' . $failUrl);
         exit;
     }
 }
@@ -148,13 +117,7 @@ function simpaypayment_handle_create(array $gatewayParams): void
 
 function simpaypayment_handle_ipn(array $gatewayParams, string $gatewayModuleName): void
 {
-    $simpay = new SimPay(
-        bearerToken: $gatewayParams['simpay_payment_bearer'],
-        serviceId: $gatewayParams['simpay_payment_service_id'],
-        signatureKey: $gatewayParams['simpay_payment_service_hash'],
-        platform: 'WHMCS',
-        platformVersion: $GLOBALS['CONFIG']['Version'] ?? '8.0'
-    );
+    $simpay = simpaypayment_get_sdk($gatewayParams);
 
     $rawPayload = file_get_contents('php://input');
     $payload = json_decode($rawPayload, true);
@@ -165,15 +128,9 @@ function simpaypayment_handle_ipn(array $gatewayParams, string $gatewayModuleNam
         die('Cannot read payload');
     }
 
-    // Determine remote IP for validation
-    $remoteIp = null;
-    if ($gatewayParams['simpay_payment_ipn_check_ip'] === 'on') {
-        $remoteIp = $_SERVER['HTTP_X_FORWARDED_FOR'] ?? $_SERVER['REMOTE_ADDR'] ?? null;
-        // Take the first IP if X-Forwarded-For contains multiple
-        if ($remoteIp && str_contains($remoteIp, ',')) {
-            $remoteIp = trim(explode(',', $remoteIp)[0]);
-        }
-    }
+    // REMOTE_ADDR only — X-Forwarded-For is set by the client and would let anyone bypass the check.
+    // Behind Cloudflare / a reverse proxy the option should be disabled (see the hint in the config).
+    $remoteIp = $gatewayParams['simpay_payment_ipn_check_ip'] === 'on' ? ($_SERVER['REMOTE_ADDR'] ?? '') : null;
 
     try {
         $ipn = $simpay->handleIpn(
@@ -202,26 +159,7 @@ function simpaypayment_handle_ipn(array $gatewayParams, string $gatewayModuleNam
             return;
         }
 
-        // Transaction is paid — process payment
-        $invoiceId = $ipn->getControl();
-        $transactionId = $ipn->getTransactionId();
-        $paidAmount = $ipn->getAmount();
-
-        $invoiceId = checkCbInvoiceID((int) $invoiceId, $gatewayParams['name']);
-        checkCbTransID($transactionId);
-
-        logTransaction($gatewayModuleName, $payload, 'Success');
-
-        addInvoicePayment(
-            $invoiceId,
-            $transactionId,
-            $paidAmount,
-            0, // fee — SimPay handles commission separately
-            $gatewayModuleName
-        );
-
-        http_response_code(200);
-        echo 'OK';
+        simpaypayment_process_paid_ipn($ipn, $payload, $gatewayParams, $gatewayModuleName);
         return;
     }
 
@@ -250,3 +188,77 @@ function simpaypayment_handle_ipn(array $gatewayParams, string $gatewayModuleNam
     echo 'OK';
 }
 
+/**
+ * Records a paid transaction on the invoice.
+ *
+ * Every exit answers "OK" unless the notification must be retried or is invalid — SimPay
+ * keeps re-sending notifications that were not acknowledged.
+ */
+function simpaypayment_process_paid_ipn(IpnPayload $ipn, array $payload, array $gatewayParams, string $gatewayModuleName): void
+{
+    $transactionId = $ipn->getTransactionId();
+    $paidAmount = $ipn->getAmount();
+    $paidCurrency = strtoupper($ipn->getCurrency());
+
+    // checkCbInvoiceID() dies when the invoice does not exist
+    $invoiceId = (int) checkCbInvoiceID((int) $ipn->getControl(), $gatewayParams['name']);
+
+    // Repeated notification for an already recorded payment — acknowledge, otherwise SimPay keeps retrying
+    // (checkCbTransID() would just exit without a response body).
+    $alreadyRecorded = Capsule::table('tblaccounts')
+        ->where('gateway', $gatewayModuleName)
+        ->where('transid', $transactionId)
+        ->exists();
+
+    if ($alreadyRecorded) {
+        logTransaction($gatewayModuleName, $payload, 'Duplicate (already recorded)');
+        http_response_code(200);
+        echo 'OK';
+        return;
+    }
+
+    $invoice = Capsule::table('tblinvoices as i')
+        ->join('tblclients as c', 'c.id', '=', 'i.userid')
+        ->join('tblcurrencies as cur', 'cur.id', '=', 'c.currency')
+        ->where('i.id', $invoiceId)
+        ->select('i.total', 'i.credit', 'cur.code as currency')
+        ->first();
+
+    $invoiceCurrency = strtoupper((string) ($invoice->currency ?? ''));
+
+    if ($paidAmount <= 0 || $paidCurrency === '' || $paidCurrency !== $invoiceCurrency) {
+        logTransaction($gatewayModuleName, $payload, sprintf(
+            'Amount/currency mismatch: paid %.2f %s, invoice currency %s',
+            $paidAmount,
+            $paidCurrency ?: '-',
+            $invoiceCurrency ?: '-'
+        ));
+        http_response_code(400);
+        echo 'Amount mismatch';
+        return;
+    }
+
+    // WHMCS supports partial payments: the money was taken, so it is recorded even if it does not cover
+    // the balance (e.g. the invoice was changed after the transaction was created) — the invoice stays Unpaid.
+    $paidSoFar = (float) Capsule::table('tblaccounts')->where('invoiceid', $invoiceId)->sum('amountin')
+        - (float) Capsule::table('tblaccounts')->where('invoiceid', $invoiceId)->sum('amountout');
+    $balance = round((float) $invoice->total - (float) $invoice->credit - $paidSoFar, 2);
+
+    $status = $paidAmount + 0.0001 < $balance
+        ? sprintf('Partial payment: paid %.2f, balance %.2f', $paidAmount, $balance)
+        : 'Success';
+
+    checkCbTransID($transactionId);
+    logTransaction($gatewayModuleName, $payload, $status);
+
+    addInvoicePayment(
+        $invoiceId,
+        $transactionId,
+        $paidAmount,
+        0, // fee — SimPay handles commission separately
+        $gatewayModuleName
+    );
+
+    http_response_code(200);
+    echo 'OK';
+}

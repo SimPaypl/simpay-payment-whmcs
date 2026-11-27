@@ -5,8 +5,6 @@
  * @copyright Copyright (c) 2025 Payments Solution Sp. z o.o.
  */
 
-use WHMCS\Config\Setting;
-
 if (!defined('WHMCS')) {
     die('This file cannot be accessed directly');
 }
@@ -15,8 +13,9 @@ require_once __DIR__ . '/simpaypayment/vendor/autoload.php';
 require_once __DIR__ . '/simpaypayment/helpers.php';
 require_once __DIR__ . '/simpaypayment/transaction.php';
 require_once __DIR__ . '/simpaypayment/channels.php';
+require_once __DIR__ . '/simpaypayment/oauth.php';
 
-const SIMPAY_PAYMENT_VERSION = '2.0.0';
+const SIMPAY_PAYMENT_VERSION = '2.1.0';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // WHMCS Gateway API
@@ -40,8 +39,7 @@ function simpaypayment_MetaData()
  */
 function simpaypayment_config()
 {
-    $systemUrl = rtrim(Setting::getValue('SystemURL'), '/');
-    $ipnUrl = $systemUrl . '/modules/gateways/callback/simpaypayment.php';
+    $ipnUrl = simpaypayment_ipn_url();
 
     return [
         'FriendlyName' => [
@@ -54,8 +52,7 @@ function simpaypayment_config()
         'simpay_section_connection' => [
             'FriendlyName' => '<strong>' . simpaypayment_admin_t('admin_section_connection') . '</strong>',
             'Type' => 'info',
-            'Description' => simpaypayment_admin_t('admin_section_connection_desc')
-                . '<br><small><a href="https://panel.simpay.pl" target="_blank">panel.simpay.pl</a></small>',
+            'Description' => simpaypayment_render_oauth_block(),
         ],
         'simpay_payment_service_id' => [
             'FriendlyName' => simpaypayment_admin_t('admin_field_service_id'),
@@ -133,7 +130,7 @@ function simpaypayment_link($params)
         return simpaypayment_render_channel_selection($params);
     }
 
-    return simpaypayment_create_and_redirect($params);
+    return simpaypayment_render_payment_form($params);
 }
 
 /**

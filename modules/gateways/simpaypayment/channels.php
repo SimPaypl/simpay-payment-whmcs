@@ -12,9 +12,7 @@
 /**
  * Render channel selection form with available payment methods.
  *
- * Instead of POSTing to callback, we create the transaction immediately
- * when the user clicks "Pay" using a JS redirect approach. The transaction
- * is pre-created with a specific channel at click time.
+ * Falls back to a plain "Pay now" form when channels cannot be loaded.
  */
 function simpaypayment_render_channel_selection(array $params): string
 {
@@ -23,11 +21,11 @@ function simpaypayment_render_channel_selection(array $params): string
         $channels = $simpay->client()->getChannels();
     } catch (\Throwable $e) {
         logModuleCall('simpaypayment', 'channels:error', [], $e->getMessage());
-        return simpaypayment_create_and_redirect($params);
+        return simpaypayment_render_payment_form($params);
     }
 
     if (empty($channels)) {
-        return simpaypayment_create_and_redirect($params);
+        return simpaypayment_render_payment_form($params);
     }
 
     $html = '<div id="simpay-channels-wrapper">';
@@ -54,47 +52,7 @@ function simpaypayment_render_channel_selection(array $params): string
 
     $html .= '</div>';
 
-    // Encode transaction params securely for the callback
-    $callbackData = base64_encode(json_encode([
-        'amount' => (float) $params['amount'],
-        'currency' => $params['currency'],
-        'description' => $params['description'],
-        'invoiceid' => (string) $params['invoiceid'],
-        'firstname' => $params['clientdetails']['firstname'],
-        'lastname' => $params['clientdetails']['lastname'],
-        'email' => $params['clientdetails']['email'],
-        'client_id' => $params['clientdetails']['client_id'] ?? '',
-        'address1' => $params['clientdetails']['address1'],
-        'address2' => $params['clientdetails']['address2'] ?? '',
-        'city' => $params['clientdetails']['city'],
-        'postcode' => $params['clientdetails']['postcode'],
-        'countrycode' => $params['clientdetails']['countrycode'],
-        'companyname' => $params['clientdetails']['companyname'] ?? '',
-        'returnurl' => $params['returnurl'],
-        'ip' => $_SERVER['REMOTE_ADDR'] ?? '',
-        'useragent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
-    ]));
-
-    // HMAC to prevent tampering
-    $signature = hash_hmac('sha256', $callbackData, $params['simpay_payment_service_hash']);
-
-    $systemUrl = rtrim($params['systemurl'], '/');
-
-    $html .= sprintf(
-        '<form id="simpay-payment-form" method="POST" action="%s/modules/gateways/callback/simpaypayment.php">'
-        . '<input type="hidden" name="action" value="create">'
-        . '<input type="hidden" name="payload" value="%s">'
-        . '<input type="hidden" name="sig" value="%s">'
-        . '<input type="hidden" name="channel" id="simpay-channel-input" value="">'
-        . '<button type="submit" id="simpay-pay-btn" class="btn btn-success btn-lg simpay-pay-btn" disabled>'
-        . '<i class="fas fa-lock"></i> %s'
-        . '</button>'
-        . '</form>',
-        $systemUrl,
-        htmlspecialchars($callbackData, ENT_QUOTES),
-        $signature,
-        $params['langpaynow']
-    );
+    $html .= simpaypayment_render_payment_form($params, true);
 
     $html .= '<script>' . simpaypayment_channels_js() . '</script>';
     $html .= '</div>';

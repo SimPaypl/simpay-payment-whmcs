@@ -12,6 +12,7 @@ Integracja jest w pełni osadzona w ścieżce płatności faktur, a dodatkowo za
 - [Instalacja](#instalacja)
 - [Aktualizacja](#aktualizacja)
 - [Konfiguracja](#konfiguracja)
+    - [Połącz z SimPay (OAuth)](#połącz-z-simpay-oauth)
     - [Dane uwierzytelniające](#dane-uwierzytelniające)
     - [Adres komunikacji (webhook / IPN)](#adres-komunikacji-webhook--ipn)
     - [Kanały płatności](#kanały-płatności)
@@ -29,6 +30,7 @@ Integracja jest w pełni osadzona w ścieżce płatności faktur, a dodatkowo za
 
 Moduł dodaje do WHMCS obsługę płatności SimPay oraz umożliwia m.in.:
 
+- **„Połącz z SimPay” (OAuth)** — automatyczna konfiguracja: klucz API, adres IPN i klucz podpisu IPN bez ręcznego kopiowania,
 - prezentację dostępnych **kanałów płatności** (banki, BLIK, karty) bezpośrednio na stronie faktury,
 - klient wybiera metodę płatności **przed przekierowaniem** do bramki,
 - automatyczny fallback do przekierowania bez wyboru kanału w razie problemów z API,
@@ -62,6 +64,7 @@ Moduł dodaje do WHMCS obsługę płatności SimPay oraz umożliwia m.in.:
    └── modules/gateways/
        ├── simpaypayment.php
        ├── callback/simpaypayment.php
+       ├── callback/simpaypayment_oauth.php
        └── simpaypayment/
            ├── vendor/
            ├── whmcs.json
@@ -70,8 +73,8 @@ Moduł dodaje do WHMCS obsługę płatności SimPay oraz umożliwia m.in.:
 4. Zaloguj się do panelu admina WHMCS.
 5. Przejdź do: **Ustawienia → Bramki płatności → Wszystkie bramki płatności**.
 6. Znajdź **SimPay.pl Przelewy i BLIK** i kliknij **Aktywuj**.
-7. Uzupełnij dane konfiguracyjne (Bearer Token, ID usługi, Klucz sygnatury).
-8. Ustaw adres URL IPN w panelu SimPay (wyświetlony w konfiguracji modułu).
+7. Kliknij **Połącz z SimPay**, zaloguj się i wybierz usługę — gotowe.  
+   Alternatywnie uzupełnij dane ręcznie (Bearer Token, ID usługi, Klucz sygnatury) i ustaw adres URL IPN w panelu SimPay (wyświetlony w konfiguracji modułu).
 
 ---
 
@@ -88,9 +91,28 @@ Moduł dodaje do WHMCS obsługę płatności SimPay oraz umożliwia m.in.:
 
 ## Konfiguracja
 
+### Połącz z SimPay (OAuth)
+
+Najprostszy sposób konfiguracji. W ustawieniach bramki kliknij **Połącz z SimPay**:
+
+1. Nastąpi przekierowanie do panelu SimPay — zaloguj się i zatwierdź dostęp.
+2. Po powrocie do WHMCS wybierz usługę płatności online (usługa z adresem zgodnym z domeną WHMCS jest zaznaczona domyślnie).
+3. Moduł automatycznie:
+   - tworzy nowy klucz API (widoczny w panelu SimPay jako `WHMCS <domena>`),
+   - ustawia adres IPN usługi na `https://twoja-domena.pl/modules/gateways/callback/simpaypayment.php`,
+   - generuje nowy klucz podpisu IPN i zapisuje wszystko w konfiguracji bramki.
+
+> ⚠️ **Uwaga**
+> - Wymagany jest **HTTPS** — adres systemu WHMCS (*Ustawienia → Ogólne → System URL*) musi zaczynać się od `https://`.
+> - Wygenerowanie nowego klucza IPN unieważnia poprzedni — jeśli usługa jest używana także przez inny sklep, przestanie on przyjmować powiadomienia.
+> - Usługa musi używać **IPN w wersji 2.0** — w przeciwnym razie moduł przerwie połączenie bez wprowadzania zmian.
+> - Endpoint `modules/gateways/callback/simpaypayment_oauth.php` jest dostępny wyłącznie dla zalogowanych administratorów z uprawnieniem *Configure Payment Gateways*.
+
+Przycisk **Rozłącz** usuwa dane dostępowe z WHMCS. Klucz API pozostaje w panelu SimPay — można go tam usunąć ręcznie.
+
 ### Dane uwierzytelniające
 
-W konfiguracji modułu uzupełnij dane otrzymane z panelu SimPay:
+Jeśli nie korzystasz z OAuth, uzupełnij w konfiguracji modułu dane otrzymane z panelu SimPay:
 
 | Pole | Skąd pobrać |
 |------|-------------|
@@ -119,7 +141,7 @@ Aby włączyć tę funkcję, zaznacz opcję **Wyświetlaj kanały płatności** 
 
 Gdy opcja jest włączona:
 - klient widzi siatkę ikon z dostępnymi metodami płatności,
-- po kliknięciu wybranej metody i przycisku „Zapłać teraz" — trafia bezpośrednio do wybranego kanału,
+- po kliknięciu wybranej metody i przycisku „Zapłać teraz" — trafia bezpośrednio do wybranego kanału (transakcja SimPay tworzona jest dopiero w momencie kliknięcia, nie przy wyświetleniu faktury),
 - jeśli pobieranie kanałów z API nie powiedzie się — moduł automatycznie wyświetli standardowy przycisk z przekierowaniem.
 
 Gdy opcja jest wyłączona:
@@ -130,7 +152,15 @@ Gdy opcja jest wyłączona:
 Opcja **Sprawdzaj adres IP w IPN** weryfikuje, czy przychodzące powiadomienie pochodzi z serwerów SimPay.
 
 - **Włączona** (domyślnie) — moduł pobiera listę dozwolonych IP z API SimPay i porównuje z adresem nadawcy.
-- **Wyłączona** — zalecane jeśli WHMCS jest za reverse proxy (np. Cloudflare, nginx) i nagłówek `X-Forwarded-For` nie jest poprawnie przekazywany.
+- **Wyłączona** — zalecane jeśli WHMCS jest za reverse proxy (np. Cloudflare, nginx). Moduł sprawdza wyłącznie `REMOTE_ADDR` — nagłówek `X-Forwarded-For` jest ignorowany, bo może go ustawić każdy. Za proxy `REMOTE_ADDR` to adres proxy, więc walidacja odrzucałaby powiadomienia.
+
+Niezależnie od tej opcji każde powiadomienie jest weryfikowane podpisem SHA-256.
+
+### Weryfikacja płatności (IPN)
+
+- Waluta płatności musi być zgodna z walutą klienta faktury — w przeciwnym razie IPN jest odrzucany (HTTP 400) i zapisywany w Gateway Log.
+- Kwota niższa niż saldo faktury jest księgowana jako **płatność częściowa** (faktura pozostaje nieopłacona) — pieniądze zostały pobrane, więc nie są odrzucane.
+- Powtórzone powiadomienie dla już zaksięgowanej transakcji jest potwierdzane (`OK`) bez ponownego księgowania.
 
 ---
 
@@ -176,7 +206,7 @@ Każdy wpis zawiera:
 
 ## Znane problemy
 
-- **Reverse proxy / Cloudflare** — jeśli WHMCS jest za proxy, nagłówek `REMOTE_ADDR` może zawierać IP proxy zamiast IP SimPay. W takim przypadku wyłącz walidację IP w konfiguracji modułu lub skonfiguruj trusted proxies na serwerze.
+- **Reverse proxy / Cloudflare** — jeśli WHMCS jest za proxy, `REMOTE_ADDR` zawiera IP proxy zamiast IP SimPay. W takim przypadku wyłącz walidację IP w konfiguracji modułu lub skonfiguruj na serwerze przywracanie prawdziwego IP (np. `mod_remoteip` / `real_ip` w nginx).
 - **Waluta inna niż PLN** — SimPay obsługuje wyłącznie PLN. Faktury w innej walucie wyświetlą komunikat o braku obsługi.
 - **Basic auth na środowisku testowym** — webhooki IPN nie dotrą jeśli endpoint jest chroniony hasłem HTTP.
 
@@ -198,8 +228,8 @@ composer install
 Paczka ZIP jest automatycznie budowana przez GitHub Actions przy tagowaniu:
 
 ```bash
-git tag v2.0.0
-git push origin v2.0.0
+git tag v2.1.0
+git push origin v2.1.0
 ```
 
 Workflow `.github/workflows/release.yml`:
@@ -217,7 +247,9 @@ Workflow `.github/workflows/release.yml`:
 ├── modules/gateways/
 │   ├── simpaypayment.php                  # Główny plik gateway
 │   ├── callback/simpaypayment.php         # IPN handler + channel redirect
+│   ├── callback/simpaypayment_oauth.php   # „Połącz z SimPay” (OAuth, tylko admin)
 │   └── simpaypayment/
+│       ├── oauth.php                      # Integracja OAuthConnector z WHMCS
 │       ├── whmcs.json                     # Metadata modułu WHMCS
 │       ├── logo.png                       # Logo wyświetlane w panelu
 │       └── vendor/                        # (generowany przez CI, nie w repo)
